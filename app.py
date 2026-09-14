@@ -82,13 +82,16 @@ def badge_color(ticker: str) -> str:
     return PALETTE[int(digest, 16) % len(PALETTE)]
 
 
+def logo_url(ticker: str) -> str:
+    return f"https://assets.parqet.com/logos/symbol/{quote(ticker)}"
+
+
 def render_header(ticker: str, name: str) -> None:
     """Logo with graceful fallback: try a real logo image, fall back to a colored
     letter badge (rendered underneath) if it 404s - no network dependency required
     for the page to look finished, no broken-image icon if the lookup ever fails."""
     color = badge_color(ticker)
     initials = ticker[:2]
-    logo_url = f"https://assets.parqet.com/logos/symbol/{quote(ticker)}"
     st.markdown(
         f"""
         <div style="display:flex;align-items:center;gap:16px;margin:4px 0 8px 0;">
@@ -96,7 +99,7 @@ def render_header(ticker: str, name: str) -> None:
             <div style="width:56px;height:56px;border-radius:12px;background:{color};
                         display:flex;align-items:center;justify-content:center;
                         font-weight:700;font-size:20px;color:#0B0E14;">{initials}</div>
-            <img src="{logo_url}" referrerpolicy="no-referrer" onerror="this.style.display='none'"
+            <img src="{logo_url(ticker)}" referrerpolicy="no-referrer" onerror="this.style.display='none'"
                  style="position:absolute;inset:0;width:56px;height:56px;border-radius:12px;
                         background:#fff;object-fit:contain;padding:6px;box-sizing:border-box;" />
           </div>
@@ -473,13 +476,18 @@ def render_comparison(threshold_pct: float, force_refresh: bool) -> None:
 
     st.markdown("### Most recent fiscal year, side by side")
     snapshot_cols = [c for c in FLAGGABLE_COLUMNS if any(c in df.columns for df in per_ticker.values())]
-    rows = {}
+    rows = []
     for t, df in per_ticker.items():
         latest = df.sort_values("fy").iloc[-1]
-        rows[f"{t} (FY{int(latest['fy'])})"] = {
-            COLUMN_LABELS[c]: format_value(c, latest[c]) if c in df.columns else "—" for c in snapshot_cols
-        }
-    st.dataframe(pd.DataFrame(rows).T, width="stretch")
+        row = {"Logo": logo_url(t), "Company": f"{t} (FY{int(latest['fy'])})"}
+        row.update({COLUMN_LABELS[c]: format_value(c, latest[c]) if c in df.columns else "—" for c in snapshot_cols})
+        rows.append(row)
+    st.dataframe(
+        pd.DataFrame(rows),
+        column_config={"Logo": st.column_config.ImageColumn("", width="small")},
+        hide_index=True,
+        width="stretch",
+    )
 
 
 st.title("SEC Filings Financial Health Dashboard")

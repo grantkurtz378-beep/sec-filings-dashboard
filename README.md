@@ -20,10 +20,14 @@ image files directly.)*
 - **Ratio engine**: gross/net margin, current ratio, debt-to-equity, ROE, ROA, YoY revenue
   growth, YoY net income growth.
 - **Flagging**: any ratio that swings more than a configurable threshold (default 20%)
-  year over year gets highlighted in the table.
-- **Dashboard**: ticker input, trend charts, a flagged ratio table, and a raw-financials
-  view — plus a multi-company comparison mode (3-5 tickers side by side, e.g. a sector
-  cohort like the big banks or big tech).
+  year over year gets highlighted — green for a move in the healthy direction, red for
+  the other way, rather than treating every big swing as bad news.
+- **Dashboard**: company header with a logo (falls back to a colored letter badge if no
+  logo is found), KPI cards, a plain-English "At a Glance" summary generated directly
+  from the computed ratios (no LLM call — every line traces to a number on the page), a
+  sparkline summary table, trend charts, a flagged ratio table, and a raw-financials view
+  — plus a multi-company comparison mode (3-5 tickers side by side, with logos, e.g. a
+  sector cohort like the big banks or big tech).
 
 ## Why this is harder than "call an API"
 
