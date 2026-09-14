@@ -8,9 +8,7 @@ Built a financial analysis dashboard parsing SEC EDGAR XBRL filings data for 13 
 companies, computing liquidity/profitability ratios and flagging significant YoY changes
 (Python, pandas, Streamlit).
 
-*(Screenshot: run `./run.sh`, open `http://localhost:8501`, and drop a screenshot of the
-dashboard here before pushing — the sandboxed browser used to build this can't export
-image files directly.)*
+![Dashboard screenshot](docs/screenshot.png)
 
 ## What it does
 
