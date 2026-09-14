@@ -1,4 +1,5 @@
 """SEC Filings Financial Health Dashboard - Streamlit UI."""
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -18,14 +19,37 @@ COLUMN_LABELS = {
     "roa": "ROA",
     "revenue_yoy_growth": "Revenue YoY",
     "net_income_yoy_growth": "Net Income YoY",
+    "Revenues": "Revenue",
+    "NetIncomeLoss": "Net Income",
 }
+PALETTE = ["#4F8EF7", "#F59E0B", "#34D399", "#F472B6", "#A78BFA", "#FB923C", "#22D3EE", "#94A3B8"]
 
-st.set_page_config(page_title="SEC Filings Financial Health Dashboard", layout="wide")
-st.title("SEC Filings Financial Health Dashboard")
-st.caption(
-    "Pulls XBRL data directly from SEC EDGAR's companyfacts API, computes standard "
-    "ratios, and flags large year-over-year swings. No scraping, no API key."
-)
+st.set_page_config(page_title="SEC Filings Financial Health Dashboard", page_icon="\U0001F4CA", layout="wide")
+alt.themes.enable("dark")
+
+
+def format_currency(val: float) -> str:
+    if pd.isna(val):
+        return "—"
+    sign = "-" if val < 0 else ""
+    abs_val = abs(val)
+    if abs_val >= 1e9:
+        return f"{sign}${abs_val / 1e9:,.1f}B"
+    if abs_val >= 1e6:
+        return f"{sign}${abs_val / 1e6:,.1f}M"
+    if abs_val >= 1e3:
+        return f"{sign}${abs_val / 1e3:,.1f}K"
+    return f"{sign}${abs_val:,.0f}"
+
+
+def format_value(raw_col: str, val: float) -> str:
+    if pd.isna(val):
+        return "—"
+    if raw_col in PERCENT_COLUMNS:
+        return f"{val:.1%}"
+    if raw_col in RATIO_COLUMNS:
+        return f"{val:.2f}x"
+    return str(val)
 
 
 def company_title(ticker: str) -> str:
@@ -48,14 +72,71 @@ def load_ticker(ticker: str, threshold: float, force_refresh: bool):
     return compute_flags(compute_ratios(fundamentals), threshold=threshold), None
 
 
-def format_value(raw_col: str, val: float) -> str:
-    if pd.isna(val):
-        return "—"
-    if raw_col in PERCENT_COLUMNS:
-        return f"{val:.1%}"
-    if raw_col in RATIO_COLUMNS:
-        return f"{val:.2f}x"
-    return str(val)
+def line_chart(df: pd.DataFrame, cols: list, axis_format: str = None, axis_title: str = None, scale: float = 1) -> None:
+    """One Altair line chart, multiple metrics as separate colored lines with readable labels.
+
+    `scale` pre-divides values before charting (e.g. 1e9 to show dollars in billions) - this
+    sidesteps d3-format's SI-prefix convention, which uses "G" for giga/billion, not "B".
+    """
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        st.caption("N/A for this company")
+        return
+    long_df = df[["fy"] + cols].melt("fy", var_name="metric", value_name="value")
+    long_df["value"] = long_df["value"] / scale
+    long_df["metric"] = long_df["metric"].map(lambda c: COLUMN_LABELS.get(c, c))
+    chart = (
+        alt.Chart(long_df)
+        .mark_line(point=True, strokeWidth=2.5)
+        .encode(
+            x=alt.X("fy:O", title=None),
+            y=alt.Y("value:Q", title=axis_title, axis=alt.Axis(format=axis_format) if axis_format else alt.Axis()),
+            color=alt.Color("metric:N", title=None, scale=alt.Scale(range=PALETTE)),
+            tooltip=[
+                alt.Tooltip("fy:O", title="Fiscal Year"),
+                alt.Tooltip("metric:N", title="Metric"),
+                alt.Tooltip("value:Q", title="Value", format=axis_format or ",.2f"),
+            ],
+        )
+        .properties(height=260)
+        .configure_legend(orient="bottom", direction="horizontal", labelLimit=200)
+        .configure_axis(grid=True, gridOpacity=0.15)
+        .configure_view(strokeWidth=0)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
+def render_kpi_row(flagged_df: pd.DataFrame) -> None:
+    sorted_df = flagged_df.sort_values("fy")
+    latest = sorted_df.iloc[-1]
+    prior = sorted_df.iloc[-2] if len(sorted_df) > 1 else None
+
+    def pct_delta(col: str) -> str:
+        if prior is None or col not in flagged_df.columns:
+            return None
+        prev_val = prior[col]
+        if pd.isna(prev_val) or prev_val == 0 or pd.isna(latest[col]):
+            return None
+        return f"{(latest[col] / prev_val - 1):+.1%}"
+
+    def pp_delta(col: str) -> str:
+        if prior is None or col not in flagged_df.columns:
+            return None
+        if pd.isna(prior[col]) or pd.isna(latest[col]):
+            return None
+        return f"{(latest[col] - prior[col]) * 100:+.1f} pp"
+
+    cards = [
+        ("Revenue", format_currency(latest.get("Revenues")), pct_delta("Revenues")),
+        ("Net Income", format_currency(latest.get("NetIncomeLoss")), pct_delta("NetIncomeLoss")),
+        ("Net Margin", format_value("net_margin", latest.get("net_margin")), pp_delta("net_margin")),
+        ("ROE", format_value("roe", latest.get("roe")), pp_delta("roe")),
+    ]
+    kpi_cols = st.columns(len(cards))
+    for col, (label, value, delta) in zip(kpi_cols, cards):
+        with col:
+            with st.container(border=True):
+                st.metric(f"{label} (FY{int(latest['fy'])})", value, delta)
 
 
 def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
@@ -73,6 +154,8 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
     st.subheader(f"{company_title(ticker)} ({ticker})")
     st.caption(f"{len(flagged_df)} fiscal years covered: {flagged_df['fy'].min()}–{flagged_df['fy'].max()}")
 
+    render_kpi_row(flagged_df)
+
     missing = [c for c in ["current_ratio", "gross_margin"] if c not in flagged_df.columns]
     if missing:
         st.caption(
@@ -83,26 +166,24 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
     st.markdown("### Trends")
     chart_row1 = st.columns(2)
     with chart_row1[0]:
-        st.caption("Revenue & Net Income ($)")
-        st.line_chart(flagged_df.set_index("fy")[["Revenues", "NetIncomeLoss"]])
+        with st.container(border=True):
+            st.caption("Revenue & Net Income ($B)")
+            line_chart(flagged_df, ["Revenues", "NetIncomeLoss"], axis_format=",.0f", scale=1e9)
     with chart_row1[1]:
-        margin_cols = [c for c in ["gross_margin", "net_margin", "roe", "roa"] if c in flagged_df.columns]
-        st.caption("Margins & Returns")
-        st.line_chart(flagged_df.set_index("fy")[margin_cols])
+        with st.container(border=True):
+            st.caption("Margins & Returns")
+            margin_cols = [c for c in ["gross_margin", "net_margin", "roe", "roa"] if c in flagged_df.columns]
+            line_chart(flagged_df, margin_cols, axis_format=".0%")
 
     chart_row2 = st.columns(2)
     with chart_row2[0]:
-        st.caption("Current Ratio")
-        if "current_ratio" in flagged_df.columns:
-            st.line_chart(flagged_df.set_index("fy")[["current_ratio"]])
-        else:
-            st.caption("N/A for this company")
+        with st.container(border=True):
+            st.caption("Current Ratio")
+            line_chart(flagged_df, ["current_ratio"], axis_format=",.2f")
     with chart_row2[1]:
-        st.caption("Debt / Equity")
-        if "debt_to_equity" in flagged_df.columns:
-            st.line_chart(flagged_df.set_index("fy")[["debt_to_equity"]])
-        else:
-            st.caption("N/A for this company")
+        with st.container(border=True):
+            st.caption("Debt / Equity")
+            line_chart(flagged_df, ["debt_to_equity"], axis_format=",.2f")
 
     st.markdown("### Ratio Table")
     st.caption(f"Rows with a metric that moved more than {threshold_pct}% year-over-year are highlighted.")
@@ -126,17 +207,22 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
 
     st.dataframe(table.style.apply(highlight_flags, axis=None), width="stretch")
 
-    with st.expander("Raw underlying financials ($)"):
+    with st.expander("Raw underlying financials"):
         raw_cols = [
             c
             for c in [
-                "end", "Revenues", "CostOfRevenue", "GrossProfit", "NetIncomeLoss", "Assets",
+                "Revenues", "CostOfRevenue", "GrossProfit", "NetIncomeLoss", "Assets",
                 "Liabilities", "StockholdersEquity", "AssetsCurrent", "LiabilitiesCurrent",
                 "NetCashProvidedByUsedInOperatingActivities",
             ]
             if c in flagged_df.columns
         ]
-        st.dataframe(flagged_df.set_index("fy")[raw_cols], width="stretch")
+        raw_indexed = flagged_df.set_index("fy")
+        raw_table = pd.DataFrame(index=raw_indexed.index)
+        raw_table["Period End"] = raw_indexed["end"]
+        for c in raw_cols:
+            raw_table[COLUMN_LABELS.get(c, c)] = raw_indexed[c].map(format_currency)
+        st.dataframe(raw_table, width="stretch")
 
 
 def render_comparison(threshold_pct: float, force_refresh: bool) -> None:
@@ -168,11 +254,33 @@ def render_comparison(threshold_pct: float, force_refresh: bool) -> None:
     st.markdown(f"### {COLUMN_LABELS.get(metric, metric)} over time")
     combined = pd.DataFrame(
         {t: df.set_index("fy")[metric] for t, df in per_ticker.items() if metric in df.columns}
-    )
-    if combined.empty:
+    ).reset_index()
+
+    if len(combined.columns) <= 1:
         st.caption("No company in this comparison reports this metric.")
     else:
-        st.line_chart(combined)
+        axis_fmt = ".0%" if metric in PERCENT_COLUMNS else ",.2f"
+        with st.container(border=True):
+            long_df = combined.melt("fy", var_name="ticker", value_name="value").dropna(subset=["value"])
+            chart = (
+                alt.Chart(long_df)
+                .mark_line(point=True, strokeWidth=2.5)
+                .encode(
+                    x=alt.X("fy:O", title=None),
+                    y=alt.Y("value:Q", title=None, axis=alt.Axis(format=axis_fmt)),
+                    color=alt.Color("ticker:N", title=None, scale=alt.Scale(range=PALETTE)),
+                    tooltip=[
+                        alt.Tooltip("fy:O", title="Fiscal Year"),
+                        alt.Tooltip("ticker:N", title="Ticker"),
+                        alt.Tooltip("value:Q", title="Value", format=axis_fmt),
+                    ],
+                )
+                .properties(height=320)
+                .configure_legend(orient="bottom", direction="horizontal")
+                .configure_axis(grid=True, gridOpacity=0.15)
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart, use_container_width=True)
 
     st.markdown("### Most recent fiscal year, side by side")
     snapshot_cols = [c for c in FLAGGABLE_COLUMNS if any(c in df.columns for df in per_ticker.values())]
@@ -184,6 +292,12 @@ def render_comparison(threshold_pct: float, force_refresh: bool) -> None:
         }
     st.dataframe(pd.DataFrame(rows).T, width="stretch")
 
+
+st.title("SEC Filings Financial Health Dashboard")
+st.caption(
+    "Pulls XBRL data directly from SEC EDGAR's companyfacts API, computes standard "
+    "ratios, and flags large year-over-year swings. No scraping, no API key."
+)
 
 with st.sidebar:
     mode = st.radio("Mode", ["Single Company", "Compare Companies"])
@@ -200,6 +314,7 @@ if mode == "Single Company":
 else:
     render_comparison(threshold_pct, force_refresh)
 
+st.divider()
 st.caption(
     "Source: SEC EDGAR XBRL companyfacts API (data.sec.gov). Cached locally in data/sec_cache.db; "
     "use \"Force refresh\" in the sidebar to re-pull the latest filings."
