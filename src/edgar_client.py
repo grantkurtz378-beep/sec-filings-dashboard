@@ -23,6 +23,8 @@ FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 # SEC requires a real contact in the User-Agent or it blocks the request outright.
 USER_AGENT = "Grant Kurtz gdkurtz@asu.edu"
 MIN_REQUEST_INTERVAL = 0.15  # ~6-7 req/sec, safely under SEC's 10 req/sec limit
+MAX_RETRIES = 3
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 _last_request_time = 0.0
 
@@ -32,14 +34,38 @@ class TickerNotFoundError(KeyError):
 
 
 def _rate_limited_get(url: str) -> requests.Response:
+    """GET with rate limiting plus retry-with-backoff on transient failures (SEC's own
+    rate limit, or a momentary 5xx) - a plain raise_for_status() turns a one-off network
+    blip into a crashed page load for no good reason."""
     global _last_request_time
-    elapsed = time.monotonic() - _last_request_time
-    if elapsed < MIN_REQUEST_INTERVAL:
-        time.sleep(MIN_REQUEST_INTERVAL - elapsed)
-    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-    _last_request_time = time.monotonic()
-    resp.raise_for_status()
-    return resp
+    last_exception: Exception | None = None
+
+    for attempt in range(MAX_RETRIES):
+        elapsed = time.monotonic() - _last_request_time
+        if elapsed < MIN_REQUEST_INTERVAL:
+            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        try:
+            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+        except requests.exceptions.RequestException as e:
+            last_exception = e
+            resp = None
+        finally:
+            _last_request_time = time.monotonic()
+
+        if resp is not None:
+            if resp.status_code not in RETRYABLE_STATUS_CODES:
+                resp.raise_for_status()
+                return resp
+            last_exception = requests.exceptions.HTTPError(
+                f"{resp.status_code} from {url}", response=resp
+            )
+
+        if attempt < MAX_RETRIES - 1:
+            retry_after = resp.headers.get("Retry-After") if resp is not None else None
+            delay = float(retry_after) if retry_after else 2**attempt
+            time.sleep(delay)
+
+    raise last_exception
 
 
 def _init_db() -> sqlite3.Connection:

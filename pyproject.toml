@@ -1,0 +1,9 @@
+[project]
+name = "sec-filings-dashboard"
+version = "1.0.0"
+description = "SEC EDGAR XBRL financial health dashboard"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
