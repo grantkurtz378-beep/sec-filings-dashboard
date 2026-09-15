@@ -4,3 +4,5 @@ __pycache__/
 data/
 .streamlit/secrets.toml
 .gstack/
+.coverage
+.pytest_cache/

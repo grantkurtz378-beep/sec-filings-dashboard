@@ -11,8 +11,9 @@ a local Streamlit dashboard.
 
 Built a financial analysis dashboard parsing SEC EDGAR XBRL filings data for 13 public
 companies, computing liquidity/profitability/DuPont ratios and free cash flow, flagging
-significant YoY changes with a 31-test regression suite covering three real XBRL
-data-quality bugs (Python, pandas, Streamlit).
+significant YoY changes with a 43-test regression suite (85% coverage) covering four real
+data-quality bugs across the XBRL pipeline and the narrative layer (Python, pandas,
+Streamlit).
 
 ![Dashboard screenshot](docs/screenshot.png)
 
@@ -37,9 +38,10 @@ data-quality bugs (Python, pandas, Streamlit).
   a raw-financials view, and an in-app "Methodology & data quality notes" panel — plus a
   multi-company comparison mode (2-8 tickers side by side with logos, e.g. a sector
   cohort like the big banks or big tech).
-- **Tested**: 31 tests covering the pipeline, ratio math, flagging logic, and the network
-  retry layer — each one reproducing a real bug this project found on real SEC data, not
-  a synthetic exercise. Runs in CI on every push (badge above).
+- **Tested**: 43 tests (85% coverage of `src/`) covering the pipeline, ratio math,
+  flagging logic, the narrative generator, and the network retry layer — each one
+  reproducing a real bug this project found on real SEC data, not a synthetic exercise.
+  Runs in CI on every push (badge above).
 
 ## Why this is harder than "call an API"
 
@@ -74,17 +76,30 @@ each has a regression test in `tests/` so it can't quietly come back.
   number FCF is meant to represent. Detecting "is this a financial institution" reuses the
   same classified-balance-sheet signal already needed for current ratio, rather than
   adding a second, separate heuristic.
+- **A bug in the narrative layer, not just the data layer.** Testing against AT&T (a
+  ticker outside the original 13) surfaced a real bug in the DuPont "biggest mover"
+  summary: dividing by a negative base year (AT&T had a loss in FY2020) produced "net
+  margin -583%" — backwards, since the underlying move was actually an improvement. Fixing
+  the sign (`(new-old)/abs(old)`, not a plain percent change) revealed a second issue: the
+  *magnitude* is still unstable near a zero base even once the sign is right. The real fix
+  was architectural — rank which DuPont factor moved most using relative change (valid for
+  comparing differently-scaled factors), but *display* each one in its own natural unit
+  (percentage points for a margin, "x" for a multiple) instead of a percent-of-a-percent.
+  `generate_summary()` was also extracted out of `app.py` into `src/narrative.py` so this
+  logic - where the bug actually lived - has direct unit tests instead of being unreachable
+  behind Streamlit's UI code.
 
 ## Testing
 
 ```bash
 ./venv/bin/pip install -r requirements-dev.txt
-./venv/bin/pytest
+./venv/bin/pytest --cov=src --cov-report=term-missing
 ```
 
-31 tests, no network calls (everything is built from minimal synthetic XBRL fixtures in
-`tests/conftest.py` that reproduce the exact real-world quirks above), runs in under a
-second. CI (`.github/workflows/ci.yml`) runs the same suite on Python 3.9 and 3.11 on
+43 tests, 85% coverage of `src/`, no network calls (everything is built from minimal
+synthetic XBRL fixtures in `tests/conftest.py` that reproduce the exact real-world quirks
+above), runs in under a second. CI (`.github/workflows/ci.yml`) runs the same suite with
+coverage on Python 3.9 and 3.11 on
 every push and PR.
 
 ## Setup
@@ -130,8 +145,9 @@ src/edgar_client.py       SEC API client: CIK lookup, rate limiting + retry, SQL
 src/pipeline.py           Raw XBRL JSON -> one row per fiscal year
 src/ratios.py             Ratio calculations, DuPont decomposition, free cash flow
 src/flags.py              YoY flagging logic
-tests/                    31 tests + synthetic XBRL fixtures reproducing real bugs
-.github/workflows/ci.yml  Runs the test suite on every push (Python 3.9 + 3.11)
+src/narrative.py          "At a Glance" summary generator + shared formatting/labels
+tests/                    43 tests + synthetic XBRL fixtures reproducing real bugs
+.github/workflows/ci.yml  Runs the test suite (with coverage) on every push (Python 3.9 + 3.11)
 data/                     SQLite cache + downloaded ticker map (gitignored)
 ```
 

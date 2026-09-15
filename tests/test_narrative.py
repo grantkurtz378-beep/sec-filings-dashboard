@@ -18,13 +18,14 @@ def test_format_currency_scales_by_magnitude():
     assert format_currency(-19_400_000_000) == "-$19.4B"
 
 
-def test_format_currency_nan_is_em_dash():
+def test_format_currency_small_value_and_nan():
+    assert format_currency(500) == "$500"
     assert format_currency(float("nan")) == "—"
 
 
-def test_format_value_percent_and_multiple():
-    assert format_value("net_margin", 0.269) == "26.9%"
-    assert format_value("debt_to_equity", 3.87) == "3.87x"
+def test_format_value_nan_and_unknown_column_fallback():
+    assert format_value("net_margin", float("nan")) == "—"
+    assert format_value("fy", 2023) == "2023"
 
 
 def test_signed_growth_keeps_sign_meaningful_across_a_negative_base():
@@ -103,3 +104,37 @@ def test_high_roe_caveat_only_fires_above_threshold():
     high_roe = pd.DataFrame({"fy": [2022, 2023], "roe": [0.10, 1.50]})
     assert not any("unusually high" in b for b in generate_summary(low_roe))
     assert any("unusually high" in b for b in generate_summary(high_roe))
+
+
+def test_revenue_decline_reads_as_declined_not_grew():
+    df = pd.DataFrame({"fy": [2022, 2023], "Revenues": [100.0, 80.0], "revenue_yoy_growth": [None, -0.20]})
+    bullets = generate_summary(df)
+    assert any("declined 20.0%" in b for b in bullets)
+
+
+def test_debt_to_equity_fallen_direction():
+    df = pd.DataFrame({"fy": [2020, 2021, 2022], "debt_to_equity": [2.0, 1.5, 1.0]})
+    bullets = generate_summary(df)
+    assert any("fallen" in b for b in bullets)
+    assert not any("risen" in b for b in bullets)
+
+
+def test_free_cash_flow_bullet_shows_pct_of_net_income():
+    df = pd.DataFrame({"fy": [2023], "free_cash_flow": [80.0], "NetIncomeLoss": [100.0]})
+    bullets = generate_summary(df)
+    assert any("80% of net income" in b for b in bullets)
+
+
+def test_biggest_flagged_move_bullet():
+    df = pd.DataFrame(
+        {
+            "fy": [2022, 2023],
+            "net_margin": [0.20, 0.20],
+            "net_margin_flag": [False, False],
+            "roe": [0.10, 0.50],
+            "roe_flag": [False, True],
+        }
+    )
+    bullets = generate_summary(df)
+    biggest = [b for b in bullets if b.startswith("Biggest move")]
+    assert biggest and "ROE went from 10.0% to 50.0%" in biggest[0]

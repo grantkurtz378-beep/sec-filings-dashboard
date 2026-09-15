@@ -40,6 +40,7 @@ COLUMN_LABELS = {
     "asset_turnover": "Asset Turnover",
     "equity_multiplier": "Equity Multiplier",
     "free_cash_flow": "Free Cash Flow",
+    "CapitalExpenditures": "Capital Expenditures",
     "Revenues": "Revenue",
     "NetIncomeLoss": "Net Income",
 }

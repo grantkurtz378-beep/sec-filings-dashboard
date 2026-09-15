@@ -343,7 +343,7 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
             for c in [
                 "Revenues", "CostOfRevenue", "GrossProfit", "NetIncomeLoss", "Assets",
                 "Liabilities", "StockholdersEquity", "AssetsCurrent", "LiabilitiesCurrent",
-                "NetCashProvidedByUsedInOperatingActivities",
+                "NetCashProvidedByUsedInOperatingActivities", "CapitalExpenditures",
             ]
             if c in flagged_df.columns
         ]
@@ -458,8 +458,8 @@ Every number on this page comes from SEC EDGAR's XBRL `companyfacts` API - the s
 structured data SEC requires every 10-K and 10-Q filer to submit. No scraping, no
 paid data vendor, no LLM in the numeric pipeline.
 
-**Three real data-quality bugs this project found and fixed** (each has a dedicated
-regression test in `tests/`, so a future change can't silently reintroduce them):
+**Four real bugs this project found and fixed** (each has a dedicated regression test
+in `tests/`, so a future change can't silently reintroduce them):
 
 - **Comparative-year mislabeling.** A 10-K reports 2-3 years of comparative figures,
   and SEC's own `fy` field is stamped with the *filing's* fiscal year for all of
@@ -476,6 +476,13 @@ regression test in `tests/`, so a future change can't silently reintroduce them)
 - **Missing subtotals.** Some filers (Walmart, for one) never tag `Liabilities` as
   its own line item - it's recoverable from `Assets = Liabilities + Equity`, but
   only if the parser knows to look for it.
+- **A bug in the narrative layer, not the data layer.** Testing against AT&T (outside
+  the original 13-ticker set) surfaced a sign bug in the DuPont "biggest mover"
+  summary: dividing by a negative base year produced "net margin -583%" - backwards,
+  since the underlying move was actually an improvement. Fixing the sign revealed a
+  second issue underneath: percent change is unstable near a zero base even once the
+  sign is right. The fix ranks by relative change but *displays* each factor in its
+  own natural unit (percentage points / "x") instead of a percent-of-a-percent.
 
 **A judgment call, not just a bug fix:** free cash flow is suppressed for banks and
 broker-dealers even on the rare filer (Goldman, Citi) that happens to tag a capex
