@@ -9,7 +9,7 @@ DEFAULT_THRESHOLD = 0.20
 # YoY growth columns are themselves already a % change - flag on their own size.
 # Everything else is a level (a margin, a ratio) - flag on its relative move vs last year.
 _GROWTH_COLUMNS = ["revenue_yoy_growth", "net_income_yoy_growth"]
-_LEVEL_COLUMNS = ["gross_margin", "net_margin", "current_ratio", "debt_to_equity", "roe", "roa"]
+_LEVEL_COLUMNS = ["gross_margin", "net_margin", "current_ratio", "debt_to_equity", "roe", "roa", "fcf_margin"]
 FLAGGABLE_COLUMNS = _LEVEL_COLUMNS + _GROWTH_COLUMNS
 
 

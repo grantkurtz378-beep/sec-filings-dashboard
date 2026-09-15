@@ -11,8 +11,10 @@ from src.flags import DEFAULT_THRESHOLD, FLAGGABLE_COLUMNS, compute_flags
 from src.pipeline import get_annual_fundamentals
 from src.ratios import compute_ratios
 
-PERCENT_COLUMNS = ["gross_margin", "net_margin", "roe", "roa", "revenue_yoy_growth", "net_income_yoy_growth"]
-RATIO_COLUMNS = ["current_ratio", "debt_to_equity"]
+PERCENT_COLUMNS = [
+    "gross_margin", "net_margin", "roe", "roa", "revenue_yoy_growth", "net_income_yoy_growth", "fcf_margin",
+]
+RATIO_COLUMNS = ["current_ratio", "debt_to_equity", "asset_turnover", "equity_multiplier"]
 GROWTH_COLUMNS = ["revenue_yoy_growth", "net_income_yoy_growth"]
 # Whether a larger value is generally the healthier direction, for flag coloring and the
 # summary. Deliberately simple (real analysis is more nuanced - e.g. an extremely high
@@ -24,6 +26,7 @@ HIGHER_IS_BETTER = {
     "roa": True,
     "current_ratio": True,
     "debt_to_equity": False,
+    "fcf_margin": True,
 }
 COLUMN_LABELS = {
     "gross_margin": "Gross Margin",
@@ -34,6 +37,10 @@ COLUMN_LABELS = {
     "roa": "ROA",
     "revenue_yoy_growth": "Revenue YoY",
     "net_income_yoy_growth": "Net Income YoY",
+    "fcf_margin": "FCF Margin",
+    "asset_turnover": "Asset Turnover",
+    "equity_multiplier": "Equity Multiplier",
+    "free_cash_flow": "Free Cash Flow",
     "Revenues": "Revenue",
     "NetIncomeLoss": "Net Income",
 }
@@ -170,6 +177,31 @@ def generate_summary(df: pd.DataFrame) -> list:
             "alone; worth reading alongside debt-to-equity."
         )
 
+    dupont_cols = ["net_margin", "asset_turnover", "equity_multiplier"]
+    if all(c in d.columns for c in dupont_cols):
+        lookback = min(5, len(d) - 1)
+        base = d.iloc[-1 - lookback] if lookback >= 2 else None
+        if base is not None and all(pd.notna(latest.get(c)) and pd.notna(base.get(c)) and base[c] != 0 for c in dupont_cols):
+            growth = {c: latest[c] / base[c] - 1 for c in dupont_cols}
+            driver_label = {"net_margin": "net margin", "asset_turnover": "asset turnover", "equity_multiplier": "leverage (equity multiplier)"}
+            biggest = max(growth, key=lambda c: abs(growth[c]))
+            bullets.append(
+                f"DuPont breakdown: over the last {lookback} years, {driver_label[biggest]} has moved the most "
+                f"toward the current ROE ({growth[biggest]:+.0%} cumulative) — net margin {growth['net_margin']:+.0%}, "
+                f"asset turnover {growth['asset_turnover']:+.0%}, leverage {growth['equity_multiplier']:+.0%}."
+            )
+
+    if "free_cash_flow" in d.columns and pd.notna(latest.get("free_cash_flow")):
+        fcf = latest["free_cash_flow"]
+        ni = latest.get("NetIncomeLoss")
+        line = f"Free cash flow was {format_currency(fcf)} in FY{int(latest['fy'])}"
+        if pd.notna(ni) and ni != 0:
+            line += (
+                f", {fcf / ni:.0%} of net income — a useful cross-check against reported earnings, "
+                "since it's less sensitive to non-cash accounting choices"
+            )
+        bullets.append(line + ".")
+
     if prior is not None:
         flag_cols = [c for c in FLAGGABLE_COLUMNS if f"{c}_flag" in d.columns and bool(latest.get(f"{c}_flag", False))]
         if flag_cols:
@@ -255,28 +287,41 @@ def render_kpi_row(flagged_df: pd.DataFrame) -> None:
             return None
         return f"{(latest[col] - prior[col]) * 100:+.1f} pp"
 
+    def x_delta(col: str) -> str:
+        if prior is None or col not in flagged_df.columns:
+            return None
+        if pd.isna(prior[col]) or pd.isna(latest[col]):
+            return None
+        return f"{(latest[col] - prior[col]):+.2f}x"
+
     cards = [
         ("Revenue", format_currency(latest.get("Revenues")), pct_delta("Revenues")),
         ("Net Income", format_currency(latest.get("NetIncomeLoss")), pct_delta("NetIncomeLoss")),
+        (
+            "Free Cash Flow",
+            format_currency(latest.get("free_cash_flow")) if "free_cash_flow" in flagged_df.columns else "—",
+            pct_delta("free_cash_flow"),
+        ),
         ("Net Margin", format_value("net_margin", latest.get("net_margin")), pp_delta("net_margin")),
         ("ROE", format_value("roe", latest.get("roe")), pp_delta("roe")),
+        ("Debt / Equity", format_value("debt_to_equity", latest.get("debt_to_equity")), x_delta("debt_to_equity")),
     ]
     st.caption(f"Fiscal year {int(latest['fy'])}")
-    # 2x2 rather than a single row of 4: st.metric's value font is a fixed size that
-    # doesn't shrink to fit, so a narrower window truncates a 4-wide row ("$416...").
-    kpi_cols = st.columns(2) + st.columns(2)
+    # 2-per-row rather than one wide row: st.metric's value font is a fixed size that
+    # doesn't shrink to fit, so a wide row truncates a long value ("$416...") at moderate
+    # window widths.
+    kpi_cols = st.columns(2) + st.columns(2) + st.columns(2)
     for col, (label, value, delta) in zip(kpi_cols, cards):
         with col:
             with st.container(border=True):
                 st.metric(label, value, delta)
 
 
-def render_key_metrics_table(flagged_df: pd.DataFrame) -> None:
-    """One row per ratio with its latest value, YoY change, and a full-history sparkline -
-    a faster scan than the year-by-year table below it."""
-    sorted_df = flagged_df.sort_values("fy")
+def _sparkline_rows(sorted_df: pd.DataFrame, cols: list) -> list:
+    """Metric/Latest/vs Prior Year/History rows for render_*_table - shared between the
+    main ratio summary and the DuPont breakdown so both get the same sparkline treatment."""
     rows = []
-    for raw_col in FLAGGABLE_COLUMNS:
+    for raw_col in cols:
         if raw_col not in sorted_df.columns:
             continue
         series = sorted_df[raw_col]
@@ -295,6 +340,10 @@ def render_key_metrics_table(flagged_df: pd.DataFrame) -> None:
                 "History": series.dropna().tolist(),
             }
         )
+    return rows
+
+
+def _render_sparkline_table(rows: list) -> None:
     if not rows:
         return
     st.dataframe(
@@ -303,6 +352,23 @@ def render_key_metrics_table(flagged_df: pd.DataFrame) -> None:
         hide_index=True,
         width="stretch",
     )
+
+
+def render_key_metrics_table(flagged_df: pd.DataFrame) -> None:
+    """One row per ratio with its latest value, YoY change, and a full-history sparkline -
+    a faster scan than the year-by-year table below it."""
+    _render_sparkline_table(_sparkline_rows(flagged_df.sort_values("fy"), FLAGGABLE_COLUMNS))
+
+
+def render_dupont_table(flagged_df: pd.DataFrame) -> None:
+    """ROE = Net Margin x Asset Turnover x Equity Multiplier, laid out so a reader can see
+    which lever is actually driving returns rather than taking ROE at face value."""
+    sorted_df = flagged_df.sort_values("fy")
+    dupont_cols = ["net_margin", "asset_turnover", "equity_multiplier", "roe"]
+    if not any(c in sorted_df.columns for c in dupont_cols):
+        return
+    st.caption("ROE = Net Margin × Asset Turnover × Equity Multiplier")
+    _render_sparkline_table(_sparkline_rows(sorted_df, dupont_cols))
 
 
 def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
@@ -329,6 +395,13 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
             f"Not shown: {', '.join(COLUMN_LABELS.get(c, c) for c in missing)} "
             "(SEC filers with an unclassified balance sheet, e.g. banks, don't tag these concepts)."
         )
+    if "current_ratio" not in flagged_df.columns:
+        st.caption(
+            "Free cash flow is also suppressed for this filer even where the raw tags exist: "
+            "a bank/broker-dealer's operating cash flow reflects swings in trading inventory, "
+            "loans, and deposits rather than core-business cash generation, so it isn't the "
+            "number FCF is meant to represent."
+        )
 
     st.markdown("### At a Glance")
     summary_bullets = generate_summary(flagged_df)
@@ -341,12 +414,17 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
     st.markdown("### Key Metrics")
     render_key_metrics_table(flagged_df)
 
+    st.markdown("### ROE Decomposition (DuPont Analysis)")
+    render_dupont_table(flagged_df)
+
     st.markdown("### Trends")
     chart_row1 = st.columns(2)
     with chart_row1[0]:
         with st.container(border=True):
-            st.caption("Revenue & Net Income ($B)")
-            line_chart(flagged_df, ["Revenues", "NetIncomeLoss"], axis_format=",.0f", scale=1e9)
+            st.caption("Revenue, Net Income & FCF ($B)")
+            line_chart(
+                flagged_df, ["Revenues", "NetIncomeLoss", "free_cash_flow"], axis_format=",.0f", scale=1e9
+            )
     with chart_row1[1]:
         with st.container(border=True):
             st.caption("Margins & Returns")
@@ -512,6 +590,57 @@ else:
     render_comparison(threshold_pct, force_refresh)
 
 st.divider()
+
+with st.expander("Methodology & data quality notes"):
+    st.markdown(
+        """
+Every number on this page comes from SEC EDGAR's XBRL `companyfacts` API - the same
+structured data SEC requires every 10-K and 10-Q filer to submit. No scraping, no
+paid data vendor, no LLM in the numeric pipeline.
+
+**Three real data-quality bugs this project found and fixed** (each has a dedicated
+regression test in `tests/`, so a future change can't silently reintroduce them):
+
+- **Comparative-year mislabeling.** A 10-K reports 2-3 years of comparative figures,
+  and SEC's own `fy` field is stamped with the *filing's* fiscal year for all of
+  them - so a company's FY2012 10-K relabels its FY2010 net income as `fy: 2012`.
+  Grouping by that field naively lets a stale comparative overwrite the real
+  current-year number. Fixed by keying on the fact's `end` date instead, which is
+  unambiguous regardless of which filing reported it.
+- **Revenue (and CapEx) tag drift.** Most companies moved off `Revenues` onto
+  `RevenueFromContractWithCustomerExcludingAssessedTax` after adopting ASC 606
+  (~2018); Goldman Sachs and Morgan Stanley report revenue net of interest expense
+  under a different tag entirely, since interest is a cost of their core business.
+  The same drift happens with the capex tag. A single fallback-chain mechanism
+  handles both.
+- **Missing subtotals.** Some filers (Walmart, for one) never tag `Liabilities` as
+  its own line item - it's recoverable from `Assets = Liabilities + Equity`, but
+  only if the parser knows to look for it.
+
+**A judgment call, not just a bug fix:** free cash flow is suppressed for banks and
+broker-dealers even on the rare filer (Goldman, Citi) that happens to tag a capex
+line - their operating cash flow reflects swings in trading inventory, loans, and
+deposits, not core-business cash generation, so the subtraction is mechanically
+possible but not economically meaningful. Same reasoning already applied to
+current ratio and gross margin for financial institutions generally.
+
+**Known simplifications:**
+- ROE and ROA use ending-period balances rather than an average of beginning and
+  ending balances - the standard simplification for a tool like this, but it will
+  read slightly differently from a source that averages.
+- A company's earliest 1-3 fiscal years in EDGAR's XBRL history can't always be
+  given an unambiguous fiscal-year label (see the mislabeling bug above) and are
+  dropped rather than guessed at.
+- The "At a Glance" summary and DuPont breakdown are rule-based text generation
+  over the ratios already on this page - not a language model, and not investment
+  advice. Every line is a direct, checkable statement about a number shown
+  elsewhere on the page.
+
+Full write-up, real bug reproductions, and the test suite: see the
+[GitHub repository](https://github.com/grantkurtz378-beep/sec-filings-dashboard).
+"""
+    )
+
 st.caption(
     "Source: SEC EDGAR XBRL companyfacts API (data.sec.gov). Cached locally in data/sec_cache.db; "
     "use \"Force refresh\" in the sidebar to re-pull the latest filings."

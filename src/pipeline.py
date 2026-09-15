@@ -44,6 +44,15 @@ TAG_ALIASES: dict[str, list[str]] = {
         "NetCashProvidedByUsedInOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
     ],
+    "CapitalExpenditures": [
+        # Apple's own history shows the same tag-drift pattern as revenue: it reported
+        # capex under ProductiveAssets through FY2013, then switched to
+        # PropertyPlantAndEquipment (confirmed via an identical overlapping FY2013 value
+        # under both tags). Banks/broker-dealers don't tag either - no material PP&E capex
+        # in that business model - so free cash flow is intentionally left N/A for them.
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PaymentsToAcquireProductiveAssets",
+    ],
 }
 
 # Balance-sheet concepts are measured at a point in time; income/cash-flow concepts

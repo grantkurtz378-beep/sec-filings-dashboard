@@ -56,4 +56,27 @@ def compute_ratios(df: pd.DataFrame) -> pd.DataFrame:
     if "NetIncomeLoss" in cols:
         out["net_income_yoy_growth"] = _signed_pct_change(out["NetIncomeLoss"])
 
+    # Free cash flow is deliberately gated on having a classified balance sheet
+    # (current_ratio computable), not just on the raw tags existing. A couple of banks
+    # and broker-dealers (Goldman, Citi) DO tag a PP&E capex line, so the subtraction is
+    # mechanically possible - but their "operating cash flow" is dominated by swings in
+    # trading inventory, loans, and deposits, not core-business cash generation, so the
+    # resulting number isn't the metric FCF is meant to be. Suppressing it here, using the
+    # same classified-balance-sheet signal already used for current_ratio, beats silently
+    # publishing a number that looks like FCF but means something different for financials.
+    has_classified_balance_sheet = {"AssetsCurrent", "LiabilitiesCurrent"} <= cols
+    if has_classified_balance_sheet and {"NetCashProvidedByUsedInOperatingActivities", "CapitalExpenditures"} <= cols:
+        out["free_cash_flow"] = out["NetCashProvidedByUsedInOperatingActivities"] - out["CapitalExpenditures"]
+        if "Revenues" in cols:
+            out["fcf_margin"] = _safe_div(out["free_cash_flow"], out["Revenues"])
+
+    # DuPont ROE decomposition: Net Margin x Asset Turnover x Equity Multiplier == ROE.
+    # Breaks "how profitable" apart from "how much leverage is doing the work" - the
+    # difference between, say, a margin-driven ROE and a leverage-driven one.
+    if "Assets" in cols:
+        if "Revenues" in cols:
+            out["asset_turnover"] = _safe_div(out["Revenues"], out["Assets"])
+        if "StockholdersEquity" in cols:
+            out["equity_multiplier"] = _safe_div(out["Assets"], out["StockholdersEquity"])
+
     return out
