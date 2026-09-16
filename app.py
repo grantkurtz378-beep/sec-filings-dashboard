@@ -264,12 +264,20 @@ def render_single_company(threshold_pct: float, force_refresh: bool) -> None:
         )
 
     st.markdown("### At a Glance")
+    st.caption(
+        "Financial **health**, not valuation — this reads the statements, not the stock "
+        "price. It says nothing about whether shares are cheap or expensive right now, "
+        "which is a separate question this dashboard doesn't answer."
+    )
     summary_bullets = generate_summary(flagged_df)
     if summary_bullets:
         with st.container(border=True):
             for bullet in summary_bullets:
                 st.markdown(f"- {bullet}")
-            st.caption("Auto-generated directly from the ratios below — a starting point, not advice.")
+            st.caption(
+                "Auto-generated directly from the ratios below — a starting point for your "
+                "own research, not investment advice."
+            )
 
     st.markdown("### Key Metrics")
     render_key_metrics_table(flagged_df)
